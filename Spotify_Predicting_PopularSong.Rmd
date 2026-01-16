@@ -1,0 +1,1059 @@
+---
+title: "Spotify Project"
+subtitle: 'By: Dameli Aziken'
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r data setup, include=FALSE}
+
+library(tidyverse)
+library(dplyr)
+library(caret)
+#library(kknn)
+library(xgboost)
+
+spotify_tracks <- read.csv("spotify-tracks.csv")
+attach(spotify_tracks)
+
+```
+
+
+# \underline{IMPORTANT INFO}
+
+* tracks: data frame with all original data except for track_id and x
+* tracks_cleaned: data frame with cleaned data and feature engineered data
+
+# \underline{DATA EXPLORATION}
+
+```{r}
+
+# Set categorical variables correctly 
+spotify_tracks$key <- as.factor(spotify_tracks$key)
+spotify_tracks$mode <- as.factor(spotify_tracks$mode)
+spotify_tracks$time_signature <- as.factor(spotify_tracks$time_signature)
+
+```
+
+
+## Remove track_id, X, and album_name:
+
+```{r dataexploration remove track_id, and album_name, echo=FALSE}
+
+# original dataset with no cleaning or engineering
+tracks <- spotify_tracks %>% dplyr::select(-X, -track_id)
+
+# cleaned data
+print(paste("Number of columns before dropping track_id and x:", ncol(spotify_tracks), "columns"))
+tracks_cleaned <- spotify_tracks %>% dplyr::select(-X, -track_id, -album_name)
+print(paste("Number of columns after dropping track_id and x:", ncol(tracks_cleaned), "columns"))
+
+```
+
+## Plot how many unique values each feature has:
+
+```{r dataexploration see unique values, echo=FALSE}
+
+unique_counts <- tracks %>%
+  summarise(across(everything(), ~ n_distinct(.))) %>%
+  pivot_longer(cols = everything(), names_to = "column", values_to = "unique_count") %>%
+  arrange(unique_count)
+
+ggplot(unique_counts, aes(x = unique_count, y = reorder(column, unique_count))) +
+  geom_bar(stat = "identity")
+
+```
+
+## Binning duration in 4 groups (<2 mins, 2-3 mins, 3-4 mins, >4 mins):
+
+```{r dataexploration get max duration, echo=FALSE}
+max(round(duration_ms / 1000))
+```
+
+
+```{r dataexploration binning seconds, echo=FALSE}
+
+tracks_cleaned <- tracks_cleaned %>%
+  mutate(binned_minutes = cut(round(duration_ms / 1000), breaks = c(0, 119, 180, 240, 5238), labels = c("<2 mins", "2-3 mins", "3-4 mins", ">4 mins")))
+
+print("Bin values:\n")
+print(paste(tracks_cleaned %>% dplyr::select(binned_minutes) %>% distinct() %>% pull(binned_minutes)))
+
+```
+
+
+## Correlation between duration of a song (in minutes) and popularity:
+
+```{r dataexploration corr mins/popularity, echo=FALSE}
+
+ggplot(tracks_cleaned, aes(x = binned_minutes, y = popularity)) +
+  geom_boxplot(fill = "lightblue", color = "darkblue")
+
+```
+
+```{r dataexploration drop binned_minutes, echo=FALSE}
+
+tracks_cleaned <- tracks_cleaned %>% dplyr::select(-binned_minutes)
+
+```
+
+## Exploring popularity
+
+```{r dataexploration popularity, echo=FALSE}
+
+data <- tracks_cleaned
+
+ggplot(data, aes(x=popularity)) +
+  geom_bar(color='blue')+
+  labs(title="Popularity")
+```
+
+* **We see, that there's a lot of 0 popularity songs, so we will see how we can manage that later.**
+
+## Exploring the predictors (features):
+
+```{r dataexploration predictors, echo=FALSE}
+
+ggplot(data, aes(x=sqrt(duration_ms)))+
+  geom_histogram() +
+  labs(title="Duration in milliseconds")
+
+ggplot(data, aes(x=danceability))+
+  geom_bar() +
+  labs(title="Danceability")
+
+ggplot(data, aes(x=energy))+
+  geom_histogram() +
+  labs(title="Energy")
+
+ggplot(data, aes(x=loudness))+
+  geom_bar() +
+  labs(title="Loudness")
+
+ggplot(data, aes(x=speechiness))+
+  geom_histogram() +
+  labs(title="Speechiness")
+
+ggplot(data, aes(x=acousticness))+
+  geom_histogram() +
+  labs(title="Acousticness")
+
+ggplot(data, aes(x=instrumentalness))+
+  geom_histogram() +
+  labs(title="Instrumentalness")
+
+ggplot(data, aes(x=liveness))+
+  geom_histogram() +
+  labs(title="Liveness")
+
+ggplot(data, aes(x=valence))+
+  geom_histogram() +
+  labs(title="Valence(Happiness")
+
+ggplot(data, aes(x=tempo))+
+  geom_histogram() +
+  labs(title="Tempo")
+
+```
+
+
+## Exploring dependencies:
+
+```{r dataexploration dependencies, echo=FALSE}
+
+# Scatter plot and the trendline of LM:
+ggplot(data, aes(x=danceability, y=popularity)) + 
+  geom_point() + 
+  geom_smooth(method='lm', color='red')  
+ 
+```
+
+* **We noticed that there is a lot of noise and that we will need to deal with this**
+
+## Exploring correlations
+
+```{r dataexploration correlations, echo=FALSE}
+
+# Scatter plot and the trendline of LM:
+library(psych)
+data_2 = data %>% dplyr::select(-artists,-track_name,-explicit,-track_genre, -starts_with("key"), -starts_with("mode"), -starts_with("explicit"), -starts_with("time_signature"))
+corPlot(data_2, cex =0.65) 
+```
+
+* **We see that there's some dependencies between the predictors. Let's see whether they're statistically significant to our target or not**
+
+## Exploring statistical significance
+
+### Statistical significance - duration_ms
+
+```{r dataexploration significance duration_ms, echo=FALSE}
+
+lm_sptf = lm(popularity~duration_ms, data=data_2)
+summary(lm_sptf) 
+
+```  
+
+### Statistical significance - explicit
+
+```{r dataexploration significance explicit, echo=FALSE}
+
+lm_sptf = lm(popularity~explicit, data=data)
+summary(lm_sptf) 
+
+```
+
+### Statistical significance - danceability
+
+```{r dataexploration significance danceability, echo=FALSE}
+
+lm_sptf = lm(popularity~danceability, data=data_2)
+summary(lm_sptf) 
+
+```
+
+### Statistical significance - energy
+
+```{r dataexploration significance energy, echo=FALSE}
+
+lm_sptf = lm(popularity~energy, data=data_2)
+summary(lm_sptf) 
+
+```
+ 
+### Statistical significance - key
+
+```{r dataexploration significance key, echo=FALSE}
+
+lm_sptf = lm(popularity~key, data=data_2)
+summary(lm_sptf)
+
+```
+
+### Statistical significance - loudness
+
+```{r dataexploration significance loudness, echo=FALSE}
+
+lm_sptf = lm(popularity~loudness, data=data_2)
+summary(lm_sptf) 
+
+```
+
+### Statistical significance - mode
+
+```{r dataexploration significance mode, echo=FALSE}
+
+lm_sptf = lm(popularity~mode, data=data_2)
+summary(lm_sptf)
+
+```
+
+### Statistical significance - speechiness
+
+```{r dataexploration significance speechiness, echo=FALSE}
+
+lm_sptf = lm(popularity~speechiness, data=data_2)
+summary(lm_sptf)
+
+```
+
+### Statistical significance - acousticness
+
+```{r dataexploration significance acousticness, echo=FALSE}
+
+lm_sptf = lm(popularity~acousticness, data=data_2)
+summary(lm_sptf) 
+
+```
+
+### Statistical significance - instrumentalness
+
+```{r dataexploration significance instrumentalness, echo=FALSE}
+
+lm_sptf = lm(popularity~instrumentalness, data=data_2)
+summary(lm_sptf) 
+
+```
+
+### Statistical significance - liveness
+
+```{r dataexploration significance liveness, echo=FALSE}
+
+lm_sptf = lm(popularity~liveness, data=data_2)
+summary(lm_sptf) 
+
+```
+
+### Statistical significance - valence
+
+```{r dataexploration significance valence, echo=FALSE}
+
+lm_sptf = lm(popularity~valence, data=data_2)
+summary(lm_sptf) 
+
+```
+
+### Statistical significance - tempo
+
+```{r dataexploration significance tempo, echo=FALSE}
+
+lm_sptf = lm(popularity~tempo, data=data_2)
+summary(lm_sptf) 
+
+```
+
+### Statistical significance - time_signature
+
+```{r dataexploration significance time_signature, echo=FALSE}
+
+lm_sptf = lm(popularity~time_signature, data=data_2)
+summary(lm_sptf)
+
+```
+
+* **We see that Energy, Key, Tempo, Mode statistically not significant for the popularity target. Let's look at their polynomials**
+ 
+## Exploring polynomials
+
+```{r dataexploration polynomials danceability, echo=FALSE}
+
+lm_sptf_poly = lm(popularity~danceability +I(danceability^2)+I(danceability^3),data=data_2 )
+summary(lm_sptf_poly)
+
+```
+
+# \underline{DATA CLEANING} 
+
+## Remove rows with missing values:
+
+```{r datacleaning remove missing values, echo=FALSE}
+print(paste("Number of rows before cleaning:", nrow(tracks)))
+tracks_cleaned <- tracks_cleaned %>%
+  filter(artists != "" & track_name != "")
+print(paste("Number of rows after cleaning:", nrow(tracks_cleaned)))
+
+```
+
+## Remove all duplicate data:
+
+```{r datacleaning remove duplicates, echo=FALSE}
+
+print(paste("Number of rows before removing duplicates:", nrow(tracks_cleaned)))
+tracks_cleaned <- tracks_cleaned %>%
+  distinct()
+print(paste("Number of rows after removing duplicates:", nrow(tracks_cleaned)))
+
+```
+
+
+
+# \underline{FEATURE ENGINEERING}
+
+## Make a feature - duration of the song in seconds:
+
+```{r featureengineering change into seconds, echo=FALSE}
+
+print(paste("Number of columns before adding seconds column:", ncol(tracks_cleaned), "columns"))
+tracks_cleaned <- tracks_cleaned %>% mutate(duration_seconds = round(duration_ms / 1000))
+print(paste("Number of columns after adding duration_seconds column:", ncol(tracks_cleaned), "columns"))
+tracks_cleaned <- tracks_cleaned %>% dplyr::select(-duration_ms)
+print(paste("Number of columns after dropping duration_ms column:", ncol(tracks_cleaned), "columns"))
+```
+
+## Group alike genres togetheer:
+
+```{r featureengineering get genres, echo=FALSE}
+
+tracks_cleaned <- tracks_cleaned %>%
+  mutate(num_artists = str_count(artists, ";") + 1)
+
+dance_and_electronic_genres <- c("breakbeat", "chicago-house", "club", "dance", 
+                                 "dancehall","deep-house", "detroit-techno", 
+                                 "disco", "drum-and-bass", "dub", "dubstep", 
+                                 "edm", "electro", "electronic", "house",
+                                 "idm", "minimal-techno", "progressive-house", 
+                                 "techno", "trance", "hardstyle","garage", "party")
+foreign_genres <- c("british", "afrobeat", "french","german",
+                    "indian","iranian", "ska", "swedish", "turkish", "reggae",
+                    "reggaeton")
+latin_genres <- c("salsa", "samba","brazil", "latin","latino", "forro", 
+                  "pagode", "mpb", "sertanejo", "spanish","tango")
+asain_genres <- c("cantopop", "j-dance", "j-pop","j-rock","j-idol","k-pop","malay",
+                  "mandopop","anime")
+rock_metal_genres <- c("alt-rock","black-metal","death-metal","grunge", "hard-rock",
+                       "heavy-metal","metal","metalcore","psych-rock", "punk-rock",
+                       "rock","rock-n-roll", "rockabilly", "punk","industrial",
+                       "grindcore", "goth","hardcore")
+hip_hop_genres <- c("hip-hop","rap", "trip-hop")
+ambient_genres <- c("chill","sleep","study","ambient","new-age")
+pop_genres <- c("indie-pop","pop","power-pop","synth-pop","pop-film")
+soul_genres <- c("groove","r-n-b","soul","blues","jazz")
+folk_genres <- c("acoustic","folk","bluegrass","guitar","singer-songwriter",
+                 "songwriter","funk")
+classical_genres <- c("classical","piano","opera")
+country_genres <- c("country","honky-tonk")
+children_genres <- c("children","kids","disney")
+indie_alt_genres <- c('indie','alternative')
+other_genres <- c("comedy","sad","romance","gospel","world-music","show-tunes",
+                  "happy","emo")
+# Create the "top_genre" column and classify the specified genres
+tracks_cleaned <- tracks_cleaned %>%
+  mutate(top_genre = case_when(
+    track_genre %in% dance_and_electronic_genres ~ "DanceElectronic",
+    track_genre %in% foreign_genres ~ "World",
+    track_genre %in% latin_genres ~ "Latin",
+    track_genre %in% asain_genres ~ "Asian",
+    track_genre %in% ambient_genres ~ "Ambient",
+    track_genre %in% rock_metal_genres ~ "RockMetal",
+    track_genre %in% pop_genres ~ "Pop",
+    track_genre %in% folk_genres ~ "AcousticFolk",
+    track_genre %in% hip_hop_genres ~ "HipHop",
+    track_genre %in% soul_genres ~ "JazzSoul",
+    track_genre %in% classical_genres ~ "Classical",
+    track_genre %in% country_genres ~ "Country",
+    track_genre %in% children_genres ~ "Children",
+    track_genre %in% indie_alt_genres ~ "IndieAlt",
+    track_genre %in% other_genres ~ "Other",
+  ))
+
+tracks_cleaned <- tracks_cleaned %>%
+  dplyr::select(-track_genre) %>% 
+  distinct() %>% 
+  arrange(popularity)
+
+tracks_cleaned <- tracks_cleaned %>%
+  arrange(artists, track_name, top_genre)
+
+# Drop rows where everything is the same except for top_genre, keeping the first occurrence
+tracks_cleaned <- tracks_cleaned %>%
+  distinct(artists, track_name, .keep_all = TRUE)
+
+print("Top genres:\n")
+print(paste(tracks_cleaned %>% dplyr::select(top_genre) %>% distinct() %>% pull(top_genre)))
+
+
+```
+
+## Deal with class imbalance by downsampling (randomly taking a sample of the data where popularity = 0):
+
+```{r featureengineering downsampling, echo=FALSE}
+
+average_count_1_10 <- tracks_cleaned %>%
+  filter(popularity >= 1 & popularity <= 10) %>%
+  group_by(popularity) %>%
+  summarise(count = n()) %>%
+  summarise(avg_count = mean(count)) %>%
+  pull(avg_count)
+
+# Get the sample of rows equal to avg of popularity 1-10
+tracks_popularity_zero <- tracks_cleaned %>%
+  filter(popularity == 0) %>%
+  sample_n(size = round(average_count_1_10))
+
+# Combine the downsampled popularity 0 rows with the other rows
+tracks_other_popularity <- tracks_cleaned %>%
+  filter(popularity != 0)
+
+# new df with the downsampled rows of 0 popularity
+tracks_balanced <- bind_rows(tracks_popularity_zero, tracks_other_popularity)
+
+# Plot the distribution of popularity values after downsampling
+ggplot(tracks_balanced, aes(x = popularity)) +
+  geom_bar(fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Popularity Values (After Downsampling)",
+       x = "Popularity",
+       y = "Count of Tracks") +
+  scale_x_continuous(breaks = seq(0, 100, by = 5))
+
+print(paste("Number of rowss after downsampling:", nrow(tracks_balanced)))
+
+```
+
+## Down sample data to 5000 rows:
+
+```{r featureengineering downsample 5000, echo=FALSE}
+
+# Downsample the data to 5,000 rows
+set.seed(18)
+tracks_balanced <- tracks_balanced %>% sample_n(5000)
+
+# Plot the distribution of popularity values after downsampling
+ggplot(tracks_balanced, aes(x = popularity)) +
+  geom_bar(fill = "blue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Popularity Values (After Downsampling)",
+       x = "Popularity",
+       y = "Count of Tracks") +
+  scale_x_continuous(breaks = seq(0, 100, by = 5))
+
+# Drop columns that do not provide predictive information
+tracks_balanced <- tracks_balanced %>% dplyr::select(-artists, -track_name)
+
+tracks_balanced$top_genre <- as.factor(tracks_balanced$top_genre)
+
+# One-hot encode categorical variables
+tracks_balanced_encoded <- model.matrix(~ . - 1, data = tracks_balanced)
+
+# Convert to data frame
+tracks_balanced_encoded <- as.data.frame(tracks_balanced_encoded)
+
+# Ensure the target variable is included
+tracks_balanced_encoded$popularity <- tracks_balanced$popularity
+
+```
+
+# \underline{MODELING}
+
+## Boosting:
+
+```{r modeling boosting setup, echo=FALSE}
+
+# Hold out 20% of the data as a final validation set
+set.seed(18)
+train_ix = createDataPartition(tracks_balanced_encoded$popularity, p = 0.8, list = FALSE)
+
+spotify_train = tracks_balanced_encoded[train_ix,]
+spotify_test  = tracks_balanced_encoded[-train_ix,]
+
+# Define the number of folds for cross-validation
+kcv = 10
+
+# Create the cross-validation folds
+cv_folds = createFolds(spotify_train$popularity, k = kcv)
+
+# Define the training control using cross-validation
+fit_control <- trainControl(
+  method = "cv",
+  indexOut = cv_folds,
+  selectionFunction = "oneSE"
+)
+
+```
+
+### XGBoost small version to get variable importance:
+
+```{r modeling boosting XGBoost1, echo=FALSE}
+
+# Set up the parameter grid for fine-tuning
+param_grid <- expand.grid(
+  nrounds = c(100),
+  max_depth = c(4, 6),
+  eta = c(0.1),
+  gamma = c(0, 0.1),
+  colsample_bytree = c(0.7),
+  min_child_weight = c(1),
+  subsample = c(0.7)
+)
+
+# Train the XGBoost model using cross-validation
+set.seed(18)
+xgb_fit <- train(popularity ~ ., data = spotify_train, 
+                 method = "xgbTree", 
+                 trControl = fit_control,
+                 tuneGrid = param_grid,
+                 verbose = FALSE)
+
+# Print the best parameters
+print(xgb_fit$bestTune)
+
+# Evaluate the tuned model on the test set
+xgb_predictions <- predict(xgb_fit, newdata = spotify_test)
+
+# Calculate RMSE for the test set
+xgb_rmse <- sqrt(mean((spotify_test$popularity - xgb_predictions)^2))
+print(paste("XGBoost RMSE:", xgb_rmse))
+
+# Variable importance
+xgb_importance <- varImp(xgb_fit, scale = TRUE)
+
+# Plot variable importance
+plot_df <- data.frame(variable = rownames(xgb_importance$importance), 
+                      rel_importance = xgb_importance$importance$Overall)
+ggplot(plot_df, aes(x = reorder(variable, rel_importance), y = rel_importance)) + 
+  geom_point() + 
+  ylab("Relative Importance (XGBoost)") + 
+  xlab("Variable") + 
+  coord_flip() + 
+  theme_minimal()
+
+# Print variable importance
+print(xgb_importance)
+
+```
+
+### XGBoost full version:
+
+```{r modeling drop values, echo=FALSE}
+
+spotify_train <- spotify_train %>% dplyr::select(-starts_with("time_signature"), 
+                                          -starts_with("key"), 
+                                          -starts_with("mode"), 
+                                          -explicitFalse, 
+                                          -explicitTrue)
+spotify_test <- spotify_test %>% dplyr::select(-starts_with("time_signature"), 
+                                        -starts_with("key"), 
+                                        -starts_with("mode"), 
+                                        -explicitFalse, 
+                                        -explicitTrue)
+
+```
+
+
+```{r modeling boosting XGBoost2, echo=FALSE}
+
+library(DiagrammeR)
+
+# Set up the parameter grid for fine-tuning
+param_grid <- expand.grid(
+  nrounds = c(100, 200),
+  max_depth = c(4, 6, 8),
+  eta = c(0.01, 0.1, 0.2),
+  gamma = c(0, 0.1, 0.2),
+  colsample_bytree = c(0.5, 0.7, 1),
+  min_child_weight = c(1, 3, 5),
+  subsample = c(0.6, 0.8, 1)
+)
+
+# Train the XGBoost model using cross-validation
+set.seed(18)
+xgb_fit2 <- train(popularity ~ ., data = spotify_train, 
+                 method = "xgbTree", 
+                 trControl = fit_control,
+                 tuneGrid = param_grid,
+                 verbose = FALSE)
+
+# Print the best parameters
+print(xgb_fit2$bestTune)
+print(xgb_fit2$results)
+
+bst <- xgb_fit2$finalModel
+xgb.plot.tree(model = bst, trees = 0)
+
+# Determine the max RMSE that's within one SE of best
+best_ix = which.min(xgb_fit2$results$RMSE)
+best = xgb_fit2$results[best_ix,]
+onese_max_RMSE = best$RMSE + best$RMSESD/sqrt(kcv)
+
+# These are the parameter values within one SD:
+onese_ixs = xgb_fit2$results$RMSE<onese_max_RMSE
+
+models_within_one_se = xgb_fit2$results[onese_ixs,]
+
+# Choose the model with the smallest max_depth:
+simplest_model_within_one_se <- models_within_one_se[which.min(models_within_one_se$max_depth),]
+
+print(simplest_model_within_one_se)
+
+
+
+# Evaluate the tuned model on the test set
+xgb_predictions <- predict(xgb_fit2, newdata = spotify_test)
+
+# Calculate RMSE for the test set
+xgb_rmse <- sqrt(mean((spotify_test$popularity - xgb_predictions)^2))
+print(paste("XGBoost RMSE:", xgb_rmse))
+
+# Variable importance
+xgb_importance <- varImp(xgb_fit2, scale = TRUE)
+
+# Plot variable importance
+plot_df <- data.frame(variable = rownames(xgb_importance$importance),
+                      rel_importance = xgb_importance$importance$Overall)
+ggplot(plot_df, aes(x = reorder(variable, rel_importance), y = rel_importance)) +
+  geom_point() +
+  ylab("Relative Importance (XGBoost)") +
+  xlab("Variable") +
+  coord_flip() +
+  theme_minimal()
+
+# Print variable importance
+print(xgb_importance)
+# Calculate R-squared for the test set
+xgb_r2 <- caret::R2(xgb_predictions, spotify_test$popularity)
+print(paste("XGBoost R-squared:", xgb_r2))
+
+# Plot actual vs predicted
+cor(spotify_test$popularity, xgb_predictions)
+
+ggplot(data = NULL, aes(x = spotify_test$popularity, y = xgb_predictions)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue") +
+  theme_minimal() +
+  labs(title = "Actual vs Predicted Popularity (XGBoost)",
+       x = "Actual Popularity", y = "Predicted Popularity") +
+  geom_abline(slope = 1, intercept = 0, col = "red")
+
+```
+
+### XGBoost prediction vs actual plot:
+
+```{r modeling boosting XGBoost2 pred/actual, echo=FALSE}
+
+ggplot(data = NULL, aes(x = spotify_test$popularity, y = xgb_predictions)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "red") +
+  theme_minimal() +
+  labs(title = "Actual vs Predicted (XGBoost)", x = "Actual Popularity", y = "Predicted Popularity")
+
+```
+
+### XGBoost prediction vs residual plot:
+
+```{r modeling boosting XGBoost2 pred/residual, echo=FALSE}
+
+xgb_residuals <- spotify_test$popularity - xgb_predictions
+
+ggplot(data = NULL, aes(x = xgb_predictions, y = xgb_residuals)) +
+  geom_point(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "Residual Plot (XGBoost)", x = "Predicted Popularity", y = "Residuals")
+
+```
+
+### XGBoost Q-Q plot:
+
+```{r modeling boosting XGBoost2 Q-Q plot, echo=FALSE}
+
+qqnorm(xgb_residuals)
+qqline(xgb_residuals, col = "red")
+
+```
+
+## KNN Regresssion:
+
+```{r modeling knn with cross validation/hypertuning, echo=FALSE}
+
+library(dplyr)
+library(caret)
+library(kknn)
+
+set.seed(18)
+
+# remove the target value
+test_features <- spotify_test %>% dplyr::select(-popularity) 
+test_target <- spotify_test$popularity
+
+# cross-validation and hypertuning parameters
+fit_control <- trainControl(method = "cv", number = 2)
+tune_grid <- expand.grid(kmax = c(1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50), distance = c(1, 2), kernel = c("rectangular", "triangular", "epanechnikov", "biweight", "triweight", "cos", "inv", "gaussian", "rank", "optimal"))
+
+# train knn model
+knn <- train(popularity ~ ., data = spotify_train, method = "kknn", trControl = fit_control, tuneGrid = tune_grid)
+
+# make predictions on test data
+knn_predictions <- predict(knn, newdata = test_features)
+
+# calculate mse and rmse
+mse <- mean((knn_predictions - test_target)^2)
+rmse <- sqrt(mse)
+
+# print overall mse and rmse
+print(paste("MSE =", mse))
+print(paste("RMSE =", rmse))
+
+# print best parameters to use
+print(knn$bestTune)
+
+# plot best parameters
+plot(knn)
+
+# Calculate R-squared for the test set
+knn_r2 <- caret::R2(knn_predictions, spotify_test$popularity)
+print(paste("KNN R-squared:", knn_r2))
+
+```
+
+
+### KNN prediction vs actual plot:
+
+```{r modeling knn pred/actual plot, echo=FALSE}
+
+ggplot(data = NULL, aes(x = spotify_test$popularity, y = knn_predictions)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "green") +
+  theme_minimal() +
+  labs(title = "Actual vs Predicted (KNN)", x = "Actual Popularity", y = "Predicted Popularity")
+
+```
+
+### KNN prediction vs residual plot:
+
+```{r modeling knn pred/residual plot, echo=FALSE}
+
+knn_residuals <- spotify_test$popularity - knn_predictions
+
+ggplot(data = NULL, aes(x = knn_predictions, y = knn_residuals)) +
+  geom_point(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "Residual Plot (KNN)", x = "Predicted Popularity", y = "Residuals")
+
+```
+
+### KNN Q-Q plot:
+
+```{r comparison Q-Q Plots knn, echo=FALSE}
+
+qqnorm(knn_residuals)
+qqline(knn_residuals, col = "red")
+
+```
+
+
+## Linear Regression:
+
+```{r modeling linear regression, echo=FALSE}
+
+library(car)
+
+# Train the linear regression model using cross-validation
+set.seed(18)
+lm_fit <- train(popularity ~ . -top_genreRockMetal, data = spotify_train,
+                method = "lm",
+                trControl = fit_control)
+
+# Evaluate the model on the test set
+lm_predictions <- predict(lm_fit, newdata = spotify_test)
+# Calculate RMSE for the test set
+lm_rmse <- sqrt(mean((spotify_test$popularity - lm_predictions)^2))
+print(paste("Linear Regression RMSE:", lm_rmse))
+
+# Variable importance for linear regression
+lm_importance <- varImp(lm_fit, scale = TRUE)
+
+# Plot variable importance
+plot_df <- data.frame(variable = rownames(lm_importance$importance),
+                      rel_importance = lm_importance$importance$Overall)
+ggplot(plot_df, aes(x = reorder(variable, rel_importance), y = rel_importance)) +
+  geom_point() +
+  ylab("Relative Importance (Linear Regression)") +
+  xlab("Variable") +
+  coord_flip() +
+  theme_minimal()
+
+# Print variable importance
+print(lm_importance)
+
+# View coefficients, R-squared, and other statistics
+lm_summary <- summary(lm_fit$finalModel)
+#print(lm_summary)
+
+# Extract and print coefficients
+lm_coefficients <- coef(lm_fit$finalModel)
+print(lm_coefficients)
+
+# Calculate and print R-squared on the test set
+lm_r2 <- caret::R2(lm_predictions, spotify_test$popularity)
+#print(paste("Linear Regression R-squared:", lm_r2))
+
+# Calculate VIF values
+vif_values <- vif(lm_fit$finalModel)
+
+# Convert VIF values to a data frame for plotting
+vif_df <- data.frame(variable = names(vif_values), VIF = vif_values)
+
+# Plot VIF values
+ggplot(vif_df, aes(x = reorder(variable, VIF), y = VIF)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "VIF Values for Linear Regression Model",
+       x = "Variable",
+       y = "VIF")
+
+print(vif_df)
+
+
+```
+### Linear Regression prediction vs actual plot:
+
+```{r modeling linear regression pred/actual, echo=FALSE}
+
+ggplot(data = NULL, aes(x = spotify_test$popularity, y = lm_predictions)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue") +
+  theme_minimal() +
+  labs(title = "Actual vs Predicted (Linear Regression)", x = "Actual Popularity", y = "Predicted Popularity")
+
+```
+
+### Linear Regression prediction vs residual plot:
+
+```{r modeling linear regression pred/residual, echo=FALSE}
+
+lm_residuals <- spotify_test$popularity - lm_predictions
+
+ggplot(data = NULL, aes(x = lm_predictions, y = lm_residuals)) +
+  geom_point(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "Residual Plot (Linear Regression)", x = "Predicted Popularity", y = "Residuals")
+
+```
+
+### Linear Regression Q-Q plot:
+
+```{r comparison Q-Q Plots lm, echo=FALSE}
+
+# Q-Q Plot
+qqnorm(lm_residuals)
+qqline(lm_residuals, col = "red")
+
+```
+
+## Comparison:
+
+### Residual Boxplots:
+
+```{r comparison residual boxplots, echo=FALSE}
+
+# Boxplots of Residuals
+residuals_df <- data.frame(
+  Model = rep(c("Linear Regression", "KNN", "XGBoost"), each = length(lm_residuals)),
+  Residuals = c(lm_residuals, knn_residuals, xgb_residuals)
+)
+
+ggplot(residuals_df, aes(x = Model, y = Residuals, fill = Model)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Boxplot of Residuals by Model", x = "Model", y = "Residuals") +
+  scale_fill_manual(values = c("blue", "green", "red"))
+
+```
+
+### BEST SUBSET SELECTION:
+```{r}
+# best subset!!!!
+# Train the linear regression model using cross-validation
+library(leaps)
+
+regfit_all = regsubsets(popularity~.-top_genreRockMetal, data = spotify_train, nvmax=24)
+summary(regfit_all)
+
+```
+
+This output indicates that the best two-variable model contains only Instrumentalness and speechiness variables. 
+
+Let's also see the results for R^2, RSS adjusted R^2 and BIC:
+
+```{r}
+summary_best_selection = summary(regfit_all)
+summary_best_selection$rsq
+```
+
+We see how R-squared increased from 3.8% to almost 11% but still remains very low wii all variables included. 
+
+Let's plot and decide which model selection we should make.
+
+```{r}
+par(mfrow = c(2, 2))
+plot(summary_best_selection$rss, xlab = "Number of Variables",
+ylab = "RSS", type = "l")
+plot(summary_best_selection$adjr2, xlab = "Number of Variables",
+ylab = "Adjusted RSq", type = "l")
+
+```
+  We see this is our 8 variables that brings us the largest value for adjusted R-squared. 
+And now,let's look at all the BIC, Cp, AIC, Adjusted R-squared to identify the optimal number of variables :
+```{r}
+plot(regfit_all, scale = "r2")
+plot(regfit_all, scale = "adjr2")
+plot(regfit_all, scale = "Cp")
+plot(regfit_all, scale = "bic")
+
+```
+
+
+```{r}
+library(leaps)
+
+# Step 3: Perform Best Subset Selection
+best_subset = regsubsets(popularity ~ .-top_genreRockMetal
+                           
+                           #danceability+speechiness+instrumentalness+valence
+                           # +duration_seconds +top_genreAmbient+top_genreAmbient+top_genreCountry
+                           , data = spotify_train, nvmax = ncol(spotify_train) - 1)
+
+# Step 4: Summary of the Best Models
+summary_best_subset = summary(best_subset)
+
+# Step 5: Selecting the Best Model based on Adjusted R-squared
+best_model_index = which.max(summary_best_subset$adjr2)
+best_model_vars = summary_best_subset$which[best_model_index, ]
+
+# Filter out the variables selected (excluding the intercept)
+selected_vars = names(best_model_vars)[best_model_vars][-1]
+
+# Step 6: Fit the Best Model
+best_model_formula= as.formula(paste("popularity ~", paste(selected_vars, collapse = "+")))
+final_model = lm(best_model_formula, data = spotify_train)
+
+# Step 7: Evaluate the Model
+predictions = predict(final_model, spotify_train)
+actuals = spotify_train$popularity
+rmse = sqrt(mean((predictions - actuals)^2))
+r_squared = summary(final_model)$r.squared
+variable_importance = summary(final_model)$coefficients
+
+# Output the results
+print(paste("RMSE:", rmse))
+print(paste("R-squared:", r_squared))
+print("Variable Importance:")
+print(variable_importance)
+
+# Step 8: Plot Actual vs. Predicted Values
+plot(actuals, predictions, xlab = "Actual Values", ylab = "Predicted Values", main = "Actual vs. Predicted")
+abline(0, 1, col = "red")
+```
+
+```{r}
+library(leaps)
+library(caret)  # For splitting the data and cross-validation
+
+# Assuming 'spotify_train' is your dataset and 'popularity' is the target variable
+set.seed(123)  # For reproducibility
+
+# Step 1: Split the Data
+trainIndex <- createDataPartition(spotify_train$popularity, p = 0.8, list = FALSE)
+train_data <- spotify_train[trainIndex, ]
+test_data <- spotify_train[-trainIndex, ]
+
+# Step 2: Perform Best Subset Selection on the Training Set
+best_subset <- regsubsets(popularity ~ .-top_genreRockMetal, data = train_data, nvmax = ncol(train_data) - 1)
+summary_best_subset <- summary(best_subset)
+
+# Step 3: Selecting the Best Model based on Adjusted R-squared
+best_model_index <- which.max(summary_best_subset$adjr2)
+best_model_vars <- summary_best_subset$which[best_model_index, ]
+
+# Filter out the variables selected (excluding the intercept)
+selected_vars <- names(best_model_vars)[best_model_vars][-1]
+
+# Step 4: Fit the Best Model on the Training Set
+best_model_formula <- as.formula(paste("popularity ~", paste(selected_vars, collapse = "+")))
+final_model <- lm(best_model_formula, data = train_data)
+
+# Step 5: Evaluate the Model on the Test Set
+predictions <- predict(final_model, newdata = test_data)
+actuals <- test_data$popularity
+rmse <- sqrt(mean((predictions - actuals)^2))
+r_squared <- 1 - sum((predictions - actuals)^2) / sum((actuals - mean(actuals))^2)
+
+# Output the results
+print(paste("Test RMSE:", rmse))
+print(paste("Test R-squared:", r_squared))
+
+# Optional: Cross-Validation
+cv_results <- train(best_model_formula, data = train_data, method = "lm", trControl = trainControl(method = "cv", number = 10))
+print(cv_results)
+
+# Plot Actual vs. Predicted Values
+plot(actuals, predictions, xlab = "Actual Values", ylab = "Predicted Values", main = "Actual vs. Predicted")
+abline(0, 1, col = "red")
+```
+
+
+

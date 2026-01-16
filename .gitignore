@@ -1,0 +1,5 @@
+*.pptx
+*.pdf
+*.pptx
+*.pdf
+data/ # optional but smart if you have data
