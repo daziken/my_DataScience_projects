@@ -1,33 +1,34 @@
 # my_DataScience_projects
 
-Author: Dameli Aziken
+Author: Dameli Aziken  
+
 Background: Data Scientist with 4 years of exp in Product/Growth Analytics/Marketing/Sales,
 Master of Science in Business Analytics & Data Science in UT Austin (Top-10)
 
 This repository showcases selected data science and business analytics projects demonstrating my ability to:
 
-Translate business problems into analytical solutions
+-Translate business problems into analytical solutions
 
-Apply statistical modeling and machine learning
+-Apply statistical modeling and machine learning
 
-Communicate insights clearly to non-technical stakeholders
+-Communicate insights clearly to non-technical stakeholders
 
 ## Projects
 ### Customer Churn Prediction
 
-Goal: Identify customers at risk of churn and uncover key drivers behind attrition.
+Goal: Identify customers at risk of churn and uncover key drivers behind attrition.  
 
-Techniques & Tools
+Techniques & Tools:
 
-Python (Pandas, NumPy, Scikit-learn)
+-Python (Pandas, NumPy, Scikit-learn)
 
-Exploratory Data Analysis (EDA)
+-Exploratory Data Analysis (EDA)
 
-Classification models (Logistic Regression, Tree-based models)
+-Classification models (Logistic Regression, Tree-based models)
 
-Model evaluation (ROC-AUC, Precision-Recall)
+-Model evaluation (ROC-AUC, Precision-Recall)
 
-Business Impact
+Business Impact:
 
 Helps retention teams target high-risk customers
 
